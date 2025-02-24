@@ -9,6 +9,7 @@
 enum EventType {
     SysCall = 1,
     CSwitch,
+    ThreadTerminate
 };
 
 typedef struct __EventObject {
@@ -18,6 +19,15 @@ typedef struct __EventObject {
         struct SysCall {
             PVOID functionAddress;
         } SysCall;
+
+        struct __CSwitch {
+            int OldThreadId;
+            int NewThreadId;
+        }CSwitch;
+
+        struct __ThreadTerminate {
+            int ThreadId;
+        }ThreadTerminate;
 
         struct Common {
             PVOID UserData;

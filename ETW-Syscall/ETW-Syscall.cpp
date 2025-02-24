@@ -6,11 +6,11 @@
 
 int main()
 {
-    std::cout << "Hello World!\n";
+
     Start_RawToPID();
 
     StartEtwTrace();
-    printf("Press ENTER key to stop the trace and exit...");
+    //printf("Press ENTER key to stop the trace and exit...");
     system("pause");
 
     StopEtwTrace();

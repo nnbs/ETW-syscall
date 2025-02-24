@@ -22,28 +22,75 @@ bool IsEmpty() {
 // Use NT Kernel Logger for tracing
 #define NT_KERNEL_LOGGER L"NT Kernel Logger"
 
+struct CSwitch
+{
+    UINT32 NewThreadId;						// + 0x00
+    UINT32 OldThreadId;						// + 0x04
+    INT8 NewThreadPriority;					// + 0x08
+    INT8 OldThreadPriority;					// + 0x09
+    UINT8 PreviousCState;					// + 0x0A
+    INT8 SpareByte;							// + 0x0B
+    INT8 OldThreadWaitReason;				// + 0x0C
+    INT8 OldThreadWaitMode;					// + 0x0D
+    INT8 OldThreadState;					// + 0x0E
+    INT8 OldThreadWaitIdealProcessor;		// + 0x0F
+    UINT32 NewThreadWaitTime;				// + 0x10
+    UINT32 Reserved;						// + 0x14
+};
+
+struct Thread_V2_TypeGroup1
+{
+    UINT32 ProcessId;
+    UINT32 TThreadId;
+    UINT32 StackBase;
+    UINT32 StackLimit;
+    UINT32 UserStackBase;
+    UINT32 UserStackLimit;
+    UINT32 StartAddr;
+    UINT32 Win32StartAddr;
+    UINT32 TebBase;
+    UINT32 SubProcessTag;
+};
+
+static bool bStop = false;
+
 void WINAPI EventCallback(PEVENT_RECORD EventRecord)
 {
+    if (bStop == true) {
+        return;
+    }
+
     std::shared_ptr<EventObject> obj = std::make_shared<EventObject>();
     obj->CPUId = EventRecord->BufferContext.ProcessorNumber;
 
     switch (EventRecord->EventHeader.EventDescriptor.Opcode) {
     case 51: // sys-entry
         obj->type = EventType::SysCall;
-        obj->UserData.SysCall.functionAddress = (PVOID)EventRecord->UserData;
+        obj->UserData.SysCall.functionAddress = *(PVOID*)EventRecord->UserData;
         //printf("%p\n", (PVOID)EventRecord->UserData);
         gEventQueue.push(obj);
 
         break;
     case 36: // CSwitch
-        obj->type = EventType::CSwitch;
-        obj->UserData.Common.UserDataLength = EventRecord->UserDataLength;
-        obj->UserData.Common.UserData = malloc(EventRecord->UserDataLength);
-        if (obj->UserData.Common.UserData) {
-            memcpy(obj->UserData.Common.UserData, EventRecord->UserData, EventRecord->UserDataLength);
-            gEventQueue.push(obj);
-        }
+        do {
+            obj->type = EventType::CSwitch;
+            struct CSwitch* pCSwitch = (struct CSwitch*)EventRecord->UserData;
+            obj->UserData.CSwitch.NewThreadId = pCSwitch->NewThreadId;
+            obj->UserData.CSwitch.OldThreadId = pCSwitch->OldThreadId;
+            if (pCSwitch->NewThreadId == 0) {
+                break;
 
+            }
+            gEventQueue.push(obj);
+        } while (0);
+        break;
+    case 2: // thread terminate
+        do {
+            obj->type = EventType::ThreadTerminate;
+            struct Thread_V2_TypeGroup1* pThread = (struct Thread_V2_TypeGroup1*)EventRecord->UserData;
+            obj->UserData.ThreadTerminate.ThreadId = pThread->TThreadId;
+            gEventQueue.push(obj);
+        } while (0);
         break;
     }
 
@@ -91,12 +138,12 @@ bool StartEtwTrace() {
         DWORD dwOffset = FIELD_OFFSET(EVENT_TRACE_PROPERTIES, BufferSize);
         RtlZeroMemory((LPBYTE)pEtwProp + dwOffset, dwEtwPropSize - dwOffset);
     }
-    pEtwProp->EnableFlags = EVENT_TRACE_FLAG_CSWITCH | EVENT_TRACE_FLAG_SYSTEMCALL;
+    pEtwProp->EnableFlags = EVENT_TRACE_FLAG_CSWITCH | EVENT_TRACE_FLAG_SYSTEMCALL | EVENT_TRACE_FLAG_THREAD;
     pEtwProp->LogFileMode = EVENT_TRACE_REAL_TIME_MODE;
     pEtwProp->LoggerNameOffset = sizeof(EVENT_TRACE_PROPERTIES);
 
 
-    wprintf(L"Initializing the ETW Consumer... ");
+    wprintf(L"Initializing the ETW Consumer... \n");
     bRetVal = StartTrace(&hTrace, providerName, pEtwProp);
 
     if (bRetVal == ERROR_SUCCESS) {
@@ -128,7 +175,7 @@ bool StartEtwTrace() {
 
 void StopEtwTrace() {
     BOOL bRetVal = FALSE;
-
+    bStop = true;
     // Stop our Kernel Logger consumer
     if (hConsumerTrace != (TRACEHANDLE)INVALID_HANDLE_VALUE) {
         bRetVal = ControlTrace(hConsumerTrace, NULL, pEtwProp, EVENT_TRACE_CONTROL_STOP);
